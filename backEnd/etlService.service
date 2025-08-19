@@ -1,0 +1,19 @@
+[Unit]
+Description=sfVisionETL Service
+After=network.target mysql.service
+
+[Service]
+Type=simple
+User=Administrator
+WorkingDirectory=/home/Administrator/etl_scripts
+ExecStart=/usr/bin/python3 /home/Administrator/etl_scripts/visionETL.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+# Logging
+StandardOutput=append:/var/log/etlService.log
+StandardError=append:/var/log/etlService.log
+
+[Install]
+WantedBy=multi-user.target
