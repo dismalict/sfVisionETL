@@ -1,11 +1,12 @@
-import mysql.connector
-import time
-import sys
-import json
 import os
 import sys
+import json
+import time
+import mysql.connector
 
-CONFIG_PATH = "/home/administrator/Desktop/db_config.json"
+# Resolve config file path relative to script location
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(BASE_DIR, "db_config.json")
 
 def load_config():
     with open(CONFIG_PATH, "r") as f:
