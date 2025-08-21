@@ -46,7 +46,7 @@ sfVisionETL/
 
 1. Clone the repo:  
    ```bash
-   git clone https://github.com/<youruser>/sfVisionETL.git
+   git clone https://github.com/dismalict/sfVisionETL.git
    cd sfVisionETL
 
 
