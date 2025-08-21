@@ -14,6 +14,9 @@ sudo apt-get update -y
 sudo apt-get upgrade -y
 sudo apt-get install -y python3 python3-pip mysql-client
 
+echo "=== Installing Python MySQL connector ==="
+pip3 install --upgrade mysql-connector-python
+
 echo "=== Copying ETL files to $TARGET_DIR ==="
 sudo mkdir -p $TARGET_DIR
 sudo cp -r ./backEnd/* $TARGET_DIR/

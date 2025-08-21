@@ -62,7 +62,7 @@ This will:
 
 Install dependencies (python3, pip, mysql-connector-python, git)
 
-Copy visionETL.py to /home/Administrator/etl_scripts/
+Copy visionETL.py to /home/administrator/etl_scripts/
 
 Copy db_config.json to Desktop
 
@@ -81,7 +81,7 @@ journalctl -u etlService.service -f
 
 All database connection info is stored in:
 
-/home/Administrator/Desktop/db_config.json
+/home/administrator/Desktop/db_config.json
 
 Example:
 
