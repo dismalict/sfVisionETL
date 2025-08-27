@@ -14,12 +14,22 @@ def load_config():
 
 def get_connection(config, db_key):
     db = config["databases"][db_key]
-    return mysql.connector.connect(
-        host=db["host"],
-        user=db["user"],
-        password=db["password"],
-        database=db["database"]
-    )
+
+    # Build connection args safely
+    kwargs = {
+        "host": db["host"],
+        "user": db["user"],
+        "password": db["password"]
+    }
+
+    if db.get("database"):
+        kwargs["database"] = db["database"]
+
+    # Debug print (remove later for production)
+    print(f"DEBUG: Connecting to {db['host']} as {db['user']} "
+          f"with password={repr(db['password'])}")
+
+    return mysql.connector.connect(**kwargs)
 
 def run_etl(config):
     try:
