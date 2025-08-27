@@ -103,6 +103,8 @@ def run_etl(config):
                 orin_row["cudnn"], orin_row["tensorrt"], orin_row["vpi"],
                 orin_row["vulkan"], orin_row["opencv"]
             ))
+        
+        #print out debug
         print("DEBUG: Insert column count:",  len([
     "hostname", "pool_timestamp", "workstation", "status", "max_people", "time_work",
     "orin_id", "orin_time", "uptime", "CPU1", "CPU2", "CPU3", "CPU4", "CPU5", "CPU6",
