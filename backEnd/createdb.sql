@@ -63,7 +63,7 @@ CREATE TABLE sf_aggregate.host_metrics_history (
     p_number TEXT,
     module TEXT,
     distribution TEXT,
-    release TEXT,
+    os_release TEXT,
     cuda TEXT,
     cudnn TEXT,
     tensorrt TEXT,

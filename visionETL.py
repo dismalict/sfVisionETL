@@ -1,164 +1,143 @@
-import os
-import sys
+#!/usr/bin/env python3
 import json
-import time
+import logging
 import mysql.connector
+from mysql.connector import Error
 
-# Resolve config file path relative to script location
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(BASE_DIR, "db_config.json")
+# --- CONFIG ---
+CONFIG_FILE = "db_config.json"
+SOURCE_DB_KEY = "sfmysql01"
+DEST_DB_KEY = "sfmysql04"
+SOURCE_SCHEMA = "sfOrinMonitoring"
+DEST_SCHEMA = "sfOrinAggregate"
+TABLES = [f"sfvis{i:02}" for i in range(1,16)]
+HISTORY_LIMIT = 30
 
+# Columns that are safe to copy (ignore problematic ones)
+SAFE_COLUMNS = [
+    'uptime','CPU1','CPU2','CPU3','CPU4','CPU5','CPU6','RAM','SWAP','EMC',
+    'GPU','APE','NVDEC','NVJPG','NVJPG1','OFA','SE','VIC','disk_available_gb',
+    'hostname','ip_address','model','jetpack','l4t','nv_power_mode','serial_number',
+    'p_number','module','distribution','cuda','cudnn','tensorrt','vpi','vulkan','opencv'
+]
+
+# --- LOGGING ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
+
+# --- HELPER FUNCTIONS ---
 def load_config():
-    with open(CONFIG_PATH, "r") as f:
-        return json.load(f)
+    with open(CONFIG_FILE) as f:
+        return json.load(f)["databases"]
 
-def get_connection(config, db_key):
-    db = config["databases"][db_key]
+def get_connection(cfg, database=None):
+    params = {k:v for k,v in cfg.items() if k in ['host','user','password']}
+    if database:
+        params['database'] = database
+    return mysql.connector.connect(**params)
 
-    # Build connection args safely
-    kwargs = {
-        "host": db["host"],
-        "user": db["user"],
-        "password": db["password"]
-    }
+def ensure_database(conn, db_name):
+    cursor = conn.cursor()
+    cursor.execute(f"CREATE DATABASE IF NOT EXISTS {db_name}")
+    conn.commit()
 
-    if db.get("database"):
-        kwargs["database"] = db["database"]
-
-    # Debug print (remove later for production)
-    print(f"DEBUG: Connecting to {db['host']} as {db['user']} "
-          f"with password={repr(db['password'])}")
-
-    return mysql.connector.connect(**kwargs)
-
-def run_etl(config):
+def get_source_columns(cursor, schema, table):
     try:
-        # use sfmysql01 as source, sfmysql03 as destination
-        src_conn = get_connection(config, "sfmysql01")
-        src_cursor = src_conn.cursor(dictionary=True)
+        cursor.execute(f"SHOW COLUMNS FROM {schema}.{table}")
+        return [row[0] for row in cursor.fetchall()]
+    except Error as e:
+        logging.warning(f"Skipping {schema}.{table}: {e}")
+        return []
 
-        dst_conn = get_connection(config, "sfmysql03")
-        dst_cursor = dst_conn.cursor()
+def get_safe_source_columns(src_cols):
+    return [c for c in src_cols if c in SAFE_COLUMNS]
 
-        hosts = [f"sfvis{str(i).zfill(2)}" for i in range(1, 16)]
+def fetch_last_row(cursor, schema, table, columns):
+    if not columns:
+        return None
+    cols_str = ', '.join(columns)
+    cursor.execute(f"SELECT {cols_str} FROM {schema}.{table} ORDER BY id DESC LIMIT 1")
+    return cursor.fetchone()
 
-        for host in hosts:
-            # sfvispool
-            src_cursor.execute(f"""
-                SELECT *
-                FROM sfvispool.{host.upper()}
-                ORDER BY Timestamp DESC
-                LIMIT 1
-            """)
-            pool_row = src_cursor.fetchone()
+def ensure_table(conn, table_name, columns):
+    if not columns:
+        return
+    cursor = conn.cursor()
+    cols_def = ', '.join([f"{c} TEXT" for c in columns])
+    sql = f"""
+    CREATE TABLE IF NOT EXISTS {table_name} (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        {cols_def}
+    ) ENGINE=InnoDB
+    """
+    cursor.execute(sql)
+    conn.commit()
 
-            # sfOrinMonitoring
-            src_cursor.execute(f"""
-                SELECT *
-                FROM sfOrinMonitoring.{host}
-                ORDER BY time DESC
-                LIMIT 1
-            """)
-            orin_row = src_cursor.fetchone()
+def insert_row(cursor, table_name, columns, row):
+    if not row:
+        return
+    cols_str = ', '.join(columns)
+    # Escape each value properly as a string literal
+    vals_escaped = []
+    for v in row:
+        if v is None:
+            vals_escaped.append("NULL")
+        else:
+            vals_escaped.append(f"'{str(v).replace('\'','\\\'')}'")
+    vals_str = ', '.join(vals_escaped)
+    sql = f"INSERT INTO {table_name} ({cols_str}) VALUES ({vals_str})"
+    cursor.execute(sql)
 
-            if not pool_row or not orin_row:
-                continue
 
-            dst_cursor.execute("""
-                INSERT INTO sf_aggregate.host_metrics_history
-                (hostname, pool_timestamp, workstation, status, max_people, time_work,
-                 orin_id, orin_time, uptime, CPU1, CPU2, CPU3, CPU4, CPU5, CPU6, RAM, SWAP, EMC, GPU,
-                 APE, NVDEC, NVJPG, NVJPG1, OFA, SE, VIC, Fan_pwmfan0, Temp_CPU, Temp_CV0,
-                 Temp_CV1, Temp_CV2, Temp_GPU, Temp_SOC0, Temp_SOC1, Temp_SOC2, Temp_tj,
-                 Power_CPU, Power_CV, Power_GPU, Power_SOC, Power_SYS5v, Power_VDDRQ,
-                 Power_tj, Power_TOT, jetson_clocks, nvp_model, disk_available_gb,
-                 ip_address, model, jetpack, l4t, nv_power_mode, serial_number, p_number,
-                 module, distribution, release, cuda, cudnn, tensorrt, vpi, vulkan, opencv)
-                VALUES (%s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s)
-            """, (
-                host,
-                pool_row["Timestamp"], pool_row["WorkStation"], pool_row["Status"],
-                pool_row["Max_People"], pool_row["Time_Work"],
-                orin_row["id"], orin_row["time"], orin_row["uptime"],
-                orin_row["CPU1"], orin_row["CPU2"], orin_row["CPU3"], orin_row["CPU4"],
-                orin_row["CPU5"], orin_row["CPU6"], orin_row["RAM"], orin_row["SWAP"],
-                orin_row["EMC"], orin_row["GPU"], orin_row["APE"], orin_row["NVDEC"],
-                orin_row["NVJPG"], orin_row["NVJPG1"], orin_row["OFA"], orin_row["SE"],
-                orin_row["VIC"], orin_row["Fan pwmfan0"], orin_row["Temp CPU"],
-                orin_row["Temp CV0"], orin_row["Temp CV1"], orin_row["Temp CV2"],
-                orin_row["Temp GPU"], orin_row["Temp SOC0"], orin_row["Temp SOC1"],
-                orin_row["Temp SOC2"], orin_row["Temp tj"], orin_row["Power CPU"],
-                orin_row["Power CV"], orin_row["Power GPU"], orin_row["Power SOC"],
-                orin_row["Power SYS5v"], orin_row["Power VDDRQ"], orin_row["Power tj"],
-                orin_row["Power TOT"], orin_row["jetson_clocks"], orin_row["nvp model"],
-                orin_row["disk_available_gb"], orin_row["ip_address"], orin_row["model"],
-                orin_row["jetpack"], orin_row["l4t"], orin_row["nv_power_mode"],
-                orin_row["serial_number"], orin_row["p_number"], orin_row["module"],
-                orin_row["distribution"], orin_row["release"], orin_row["cuda"],
-                orin_row["cudnn"], orin_row["tensorrt"], orin_row["vpi"],
-                orin_row["vulkan"], orin_row["opencv"]
-            ))
+def trim_history(cursor, table_name, limit=HISTORY_LIMIT):
+    cursor.execute(f"""
+        DELETE FROM {table_name}
+        WHERE id NOT IN (
+            SELECT id FROM (
+                SELECT id FROM {table_name} ORDER BY id DESC LIMIT {limit}
+            ) t
+        )
+    """)
+
+# --- MAIN ETL ---
+def main():
+    dbs = load_config()
+    src_conn = get_connection(dbs[SOURCE_DB_KEY], SOURCE_SCHEMA)
+    dest_conn = get_connection(dbs[DEST_DB_KEY])
+    ensure_database(dest_conn, DEST_SCHEMA)
+    dest_conn.database = DEST_SCHEMA
+
+    src_cursor = src_conn.cursor()
+    dest_cursor = dest_conn.cursor()
+
+for table in tables:
+    logging.info(f"=== Processing {table} ===")
+    try:
+        # Load rows from source
+        rows = fetch_rows(src_cursor, table, SAFE_COLUMNS)
+        if not rows:
+            logging.info(f"No rows to copy for {table}")
+            continue
+
+        # Insert rows into destination
+        for row in rows:
+            try:
+                insert_row(dest_cursor, table, SAFE_COLUMNS, row)
+            except Exception as e:
+                logging.warning(f"ETL error for row in {table}: {e}")
         
-        #print out debug
-        print("DEBUG: Insert column count:",  len([
-    "hostname", "pool_timestamp", "workstation", "status", "max_people", "time_work",
-    "orin_id", "orin_time", "uptime", "CPU1", "CPU2", "CPU3", "CPU4", "CPU5", "CPU6",
-    "RAM", "SWAP", "EMC", "GPU", "APE", "NVDEC", "NVJPG", "NVJPG1", "OFA", "SE", "VIC",
-    "Fan_pwmfan0", "Temp_CPU", "Temp_CV0", "Temp_CV1", "Temp_CV2", "Temp_GPU", "Temp_SOC0",
-    "Temp_SOC1", "Temp_SOC2", "Temp_tj", "Power_CPU", "Power_CV", "Power_GPU", "Power_SOC",
-    "Power_SYS5v", "Power_VDDRQ", "Power_tj", "Power_TOT", "jetson_clocks", "nvp_model",
-    "disk_available_gb", "ip_address", "model", "jetpack", "l4t", "nv_power_mode",
-    "serial_number", "p_number", "module", "distribution", "release", "cuda", "cudnn",
-    "tensorrt", "vpi", "vulkan", "opencv"
-        ]))
-        print("DEBUG: Values count:", len((
-            host,
-            pool_row["Timestamp"], pool_row["WorkStation"], pool_row["Status"],
-            pool_row["Max_People"], pool_row["Time_Work"],
-            orin_row["id"], orin_row["time"], orin_row["uptime"],
-            orin_row["CPU1"], orin_row["CPU2"], orin_row["CPU3"], orin_row["CPU4"],
-            orin_row["CPU5"], orin_row["CPU6"], orin_row["RAM"], orin_row["SWAP"],
-            orin_row["EMC"], orin_row["GPU"], orin_row["APE"], orin_row["NVDEC"],
-            orin_row["NVJPG"], orin_row["NVJPG1"], orin_row["OFA"], orin_row["SE"],
-            orin_row["VIC"], orin_row["Fan pwmfan0"], orin_row["Temp CPU"],
-            orin_row["Temp CV0"], orin_row["Temp CV1"], orin_row["Temp CV2"],
-            orin_row["Temp GPU"], orin_row["Temp SOC0"], orin_row["Temp SOC1"],
-            orin_row["Temp SOC2"], orin_row["Temp tj"], orin_row["Power CPU"],
-            orin_row["Power CV"], orin_row["Power GPU"], orin_row["Power SOC"],
-            orin_row["Power SYS5v"], orin_row["Power VDDRQ"], orin_row["Power tj"],
-            orin_row["Power TOT"], orin_row["jetson_clocks"], orin_row["nvp model"],
-            orin_row["disk_available_gb"], orin_row["ip_address"], orin_row["model"],
-            orin_row["jetpack"], orin_row["l4t"], orin_row["nv_power_mode"],
-            orin_row["serial_number"], orin_row["p_number"], orin_row["module"],
-            orin_row["distribution"], orin_row["release"], orin_row["cuda"],
-            orin_row["cudnn"], orin_row["tensorrt"], orin_row["vpi"],
-            orin_row["vulkan"], orin_row["opencv"]
-        )))
+        logging.info(f"Inserted last row from {table}")
 
-        # prune older than 7 days
-        dst_cursor.execute("""
-            DELETE FROM sf_aggregate.host_metrics_history
-            WHERE collected_at < NOW() - INTERVAL 7 DAY
-        """)
-        dst_conn.commit()
-
-        src_cursor.close()
-        src_conn.close()
-        dst_cursor.close()
-        dst_conn.close()
-        print("ETL cycle complete (with pruning)", file=sys.stderr)
-
+    except mysql.connector.Error as e:
+        logging.warning(f"Skipping {table}: {e}")
     except Exception as e:
-        print(f"ETL error: {e}", file=sys.stderr)
+        logging.error(f"Unexpected error for {table}: {e}")
 
+
+    src_cursor.close()
+    dest_cursor.close()
+    src_conn.close()
+    dest_conn.close()
+    logging.info("ETL run completed")
 
 if __name__ == "__main__":
-    config = load_config()
-    while True:
-        run_etl(config)
-        time.sleep(10)
+    main()
