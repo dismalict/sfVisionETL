@@ -3,25 +3,25 @@
     "sfmysql01": {
       "host": "sfmysql01.sf.local",
       "user": "etl_user",
-      "password": "SuperSecretPassword",
+      "password": "8%gfWi7G2X$9EL",
       "database": null
     },
     "sfmysql02": {
       "host": "sfmysql02.sf.local",
       "user": "etl_user",
-      "password": "AnotherPassword",
+      "password": "8%gfWi7G2X$9EL",
       "database": null
     },
     "sfmysql03": {
       "host": "sfmysql03.sf.local",
       "user": "etl_user",
-      "password": "YetAnotherPassword",
-      "database": "sf_aggregate"
+      "password": "8%gfWi7G2X$9EL",
+      "database": null
     },
     "sfmysql04": {
       "host": "sfmysql04.sf.local",
       "user": "etl_user",
-      "password": "DifferentPassword",
+      "password": "8%gfWi7G2X$9EL",
       "database": null
     }
   }
